@@ -68,40 +68,43 @@ export function VideoCreator({ onVideoCreate }: VideoCreatorProps) {
       setIsRendering(true);
       setRenderProgress(0);
 
-      // Add canvas to DOM temporarily if it doesn't exist
       const canvas = document.createElement('canvas');
       const { width, height } = dimensions[dimension];
       canvas.width = width;
       canvas.height = height;
-      const ctx = canvas.getContext('2d')!;
-
-      // Set up MediaRecorder with proper options
-      const stream = canvas.captureStream(30); // 30 fps
+      const ctx = canvas.getContext('2d', { alpha: false })!; // Disable alpha for better performance
+      
+      // Pre-load all images to prevent flickering
+      const loadedImages = await Promise.all(images.map(loadImage));
+      
+      const stream = canvas.captureStream(30);
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: 'video/webm;codecs=vp8',
-        videoBitsPerSecond: 2500000 // 2.5 Mbps
+        videoBitsPerSecond: 2500000
       });
 
       const chunks: Blob[] = [];
       let currentFrame = 0;
       const fps = 30;
       const frameDuration = 1000 / fps;
-      const imageDisplayTime = 3000; // 3 seconds per image
-      const transitionTime = 100; // 1 second transition
+      const imageDisplayTime = 3000;
+      const transitionTime = 500; // Increased for smoother transitions
       const totalFrames = images.length * ((imageDisplayTime + transitionTime) / frameDuration);
 
       mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          chunks.push(e.data);
-        }
+        if (e.data.size > 0) chunks.push(e.data);
       };
 
       mediaRecorder.onstop = async () => {
-        const blob = new Blob(chunks, { type: 'video/webm' });
         try {
-          let finalBlob = blob;
+          let finalBlob = new Blob(chunks, { type: 'video/webm' });
+
           if (audio) {
-            finalBlob = await combineVideoWithAudio(blob, audio);
+            // Validate audio file
+            if (!audio.type.startsWith('audio/')) {
+              throw new Error('Invalid audio file format');
+            }
+            finalBlob = await combineVideoWithAudio(finalBlob, audio);
           }
 
           const videoFile = new File([finalBlob], 'rendered-video.webm', {
@@ -118,10 +121,10 @@ export function VideoCreator({ onVideoCreate }: VideoCreatorProps) {
           };
 
           onVideoCreate(videoFileObject);
-          setIsRendering(false);
         } catch (error) {
-          console.error('Error creating video:', error);
-          toast.error("Failed to create video");
+          console.error('Error finalizing video:', error);
+          toast.error(error instanceof Error ? error.message : "Failed to create video");
+        } finally {
           setIsRendering(false);
         }
       };
@@ -131,90 +134,100 @@ export function VideoCreator({ onVideoCreate }: VideoCreatorProps) {
           mediaRecorder.stop();
           return;
         }
-      
+
         const currentTime = currentFrame * frameDuration;
         const cycleTime = imageDisplayTime + transitionTime;
         const currentCycle = Math.floor(currentTime / cycleTime);
         const timeInCycle = currentTime % cycleTime;
-      
+
         const currentImageIndex = currentCycle % images.length;
         const nextImageIndex = (currentCycle + 1) % images.length;
-      
-        const currentImg = await loadImage(images[currentImageIndex]);
-        ctx.clearRect(0, 0, width, height);
-      
+
+        // Use pre-loaded images
+        const currentImg = loadedImages[currentImageIndex];
+        const nextImg = loadedImages[nextImageIndex];
+
+        // Clear with solid color instead of using clearRect
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, width, height);
+
         if (timeInCycle < imageDisplayTime) {
-          // Display current image
+          // Display current image without transition
           ctx.globalAlpha = 1;
           drawImageCovered(ctx, currentImg, width, height);
         } else {
-          // Transition to next image
-          const nextImg = await loadImage(images[nextImageIndex]);
-          const transitionProgress = (timeInCycle - imageDisplayTime) / transitionTime;
-      
-          // Apply smoother transition blending
+          // Apply transition with easing
+          const transitionProgress = easeInOutCubic((timeInCycle - imageDisplayTime) / transitionTime);
+
           switch (transition) {
             case 'fade':
-              ctx.globalAlpha = 1 - transitionProgress; // Smooth fade-out for current image
+              // Draw both images with proper alpha
               drawImageCovered(ctx, currentImg, width, height);
-              
-              ctx.globalAlpha = transitionProgress; // Smooth fade-in for next image
+              ctx.globalAlpha = transitionProgress;
               drawImageCovered(ctx, nextImg, width, height);
               break;
-      
+
             case 'slide':
-              drawImageCovered(ctx, currentImg, width, height);
+              // Use transform instead of translation for better performance
               ctx.save();
-              ctx.translate(width * (1 - transitionProgress), 0);  // Horizontal slide
+              drawImageCovered(ctx, currentImg, width, height);
+              ctx.transform(1, 0, 0, 1, width * (1 - transitionProgress), 0);
               drawImageCovered(ctx, nextImg, width, height);
               ctx.restore();
               break;
-      
+
             case 'verticalSlide':
+              ctx.save();
               drawImageCovered(ctx, currentImg, width, height);
-              ctx.save();
-              ctx.translate(0, height * (1 - transitionProgress));  // Vertical slide
+              ctx.transform(1, 0, 0, 1, 0, height * (1 - transitionProgress));
               drawImageCovered(ctx, nextImg, width, height);
               ctx.restore();
               break;
-      
+
             case 'zoom':
-              const scale = 1 + (0.2 * (1 - transitionProgress));  // Adjust zoom scale
               ctx.save();
-              ctx.translate(width / 2, height / 2);
-              ctx.scale(scale, scale);
-              ctx.translate(-width / 2, -height / 2);
+              drawImageCovered(ctx, currentImg, width, height);
+              const scale = 1 + (0.2 * transitionProgress);
+              ctx.transform(scale, 0, 0, scale, width * (1 - scale) / 2, height * (1 - scale) / 2);
+              ctx.globalAlpha = transitionProgress;
               drawImageCovered(ctx, nextImg, width, height);
               ctx.restore();
               break;
-      
+
             case 'rotate':
-              const angle = Math.PI * transitionProgress;  // Rotate the next image
               ctx.save();
-              ctx.translate(width / 2, height / 2);
-              ctx.rotate(angle);
-              ctx.translate(-width / 2, -height / 2);
+              drawImageCovered(ctx, currentImg, width, height);
+              const angle = Math.PI * 2 * transitionProgress;
+              ctx.transform(
+                Math.cos(angle), Math.sin(angle),
+                -Math.sin(angle), Math.cos(angle),
+                width / 2 * (1 - Math.cos(angle)) + height / 2 * Math.sin(angle),
+                -width / 2 * Math.sin(angle) + height / 2 * (1 - Math.cos(angle))
+              );
+              ctx.globalAlpha = transitionProgress;
               drawImageCovered(ctx, nextImg, width, height);
               ctx.restore();
               break;
-      
+
             case 'flip':
-              const flipProgress = Math.min(1, transitionProgress * 2);  // For flip effect
               ctx.save();
-              ctx.translate(width / 2, height / 2);
-              ctx.scale(flipProgress, 1);  // Flip horizontally based on progress
-              ctx.translate(-width / 2, -height / 2);
-              drawImageCovered(ctx, nextImg, width, height);
+              const flipScale = Math.cos(Math.PI * transitionProgress);
+              ctx.transform(flipScale, 0, 0, 1, width * (1 - flipScale) / 2, 0);
+              if (flipScale < 0) {
+                ctx.transform(-1, 0, 0, 1, width, 0);
+                drawImageCovered(ctx, nextImg, width, height);
+              } else {
+                drawImageCovered(ctx, currentImg, width, height);
+              }
               ctx.restore();
               break;
           }
         }
-      
+
         currentFrame++;
         setRenderProgress((currentFrame / totalFrames) * 100);
         requestAnimationFrame(renderFrame);
       };
-      
 
       mediaRecorder.start();
       renderFrame();
@@ -226,51 +239,98 @@ export function VideoCreator({ onVideoCreate }: VideoCreatorProps) {
     }
   };
 
-  // Helper functions
+  // Improved helper functions
   const loadImage = (file: File): Promise<HTMLImageElement> => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error(`Failed to load image: ${file.name}`));
       img.src = URL.createObjectURL(file);
     });
   };
 
-  const drawImageCovered = (ctx: CanvasRenderingContext2D, img: HTMLImageElement, width: number, height: number) => {
-    const scale = Math.max(width / img.width, height / img.height);
-    const x = (width - img.width * scale) * 0.5;
-    const y = (height - img.height * scale) * 0.5;
-    ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
+  const drawImageCovered = (
+    ctx: CanvasRenderingContext2D,
+    img: HTMLImageElement,
+    width: number,
+    height: number
+  ) => {
+    const imgRatio = img.width / img.height;
+    const canvasRatio = width / height;
+    let renderWidth = width;
+    let renderHeight = height;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (imgRatio > canvasRatio) {
+      renderWidth = height * imgRatio;
+      offsetX = -(renderWidth - width) / 2;
+    } else {
+      renderHeight = width / imgRatio;
+      offsetY = -(renderHeight - height) / 2;
+    }
+
+    ctx.drawImage(img, offsetX, offsetY, renderWidth, renderHeight);
   };
 
+  // Easing function for smoother transitions
+  const easeInOutCubic = (t: number): number => {
+    return t < 0.5
+      ? 4 * t * t * t
+      : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  };
+
+  // Improved audio handling
   const combineVideoWithAudio = async (videoBlob: Blob, audioFile: File): Promise<Blob> => {
     const ffmpeg = new FFmpeg();
-    await ffmpeg.load();
-
+  
     try {
-      // Write video and audio files to FFmpeg's virtual filesystem
+      await ffmpeg.load();
+  
+      ffmpeg.on('progress', ({ progress }) => {
+        setRenderProgress(Math.min(100, Math.round(progress * 100)));
+      });
+  
       await ffmpeg.writeFile('video.webm', await fetchFile(videoBlob));
       await ffmpeg.writeFile('audio.mp3', await fetchFile(audioFile));
-
-      // Run FFmpeg command to combine video and audio
+  
+      // Extract video duration
+      const videoInfo = await ffmpeg.exec(['-i', 'video.webm']);
+      console.log("Video Info Output:", videoInfo);
+  
+      const durationMatch = videoInfo.toString().match(/Duration: (\d{2}):(\d{2}):(\d{2}\.\d+)/);
+      if (!durationMatch) {
+        console.warn('Duration not found in video info.');
+      } else {
+        const [, hours, minutes, seconds] = durationMatch;
+        const durationInSeconds = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseFloat(seconds);
+        console.log("Video Duration (seconds):", durationInSeconds);
+      }
+  
+      // Combine video and audio
       await ffmpeg.exec([
         '-i', 'video.webm',
         '-i', 'audio.mp3',
         '-c:v', 'copy',
         '-c:a', 'aac',
         '-shortest',
+        '-map', '0:v:0',
+        '-map', '1:a:0',
+        '-b:a', '192k',
         'output.mp4'
       ]);
-
-      // Read the output file
+  
       const data = await ffmpeg.readFile('output.mp4');
-      const finalBlob = new Blob([data], { type: 'video/mp4' });
-
-      return finalBlob;
+      return new Blob([data], { type: 'video/mp4' });
+  
+    } catch (error) {
+      console.error('FFmpeg error:', error);
+      throw new Error('Failed to combine video and audio');
     } finally {
-      // Clean up
       ffmpeg.terminate();
     }
   };
+  
 
   return (
     <div className="h-full grid grid-cols-1 lg:grid-cols-3 gap-6">
