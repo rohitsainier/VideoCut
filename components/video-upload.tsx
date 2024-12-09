@@ -3,10 +3,10 @@
 import { Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
-import { VideoFile } from "@/types/video";
+import { EditVideoFile } from "@/types/video";
 
 interface VideoUploadProps {
-  onVideoSelect: (file: VideoFile) => void;
+  onVideoSelect: (file: EditVideoFile) => void;
 }
 
 export function VideoUpload({ onVideoSelect }: VideoUploadProps) {

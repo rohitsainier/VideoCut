@@ -87,7 +87,7 @@ export function VideoCreator({ onVideoCreate }: VideoCreatorProps) {
       const fps = 30;
       const frameDuration = 1000 / fps;
       const imageDisplayTime = 3000; // 3 seconds per image
-      const transitionTime = 1000; // 1 second transition
+      const transitionTime = 100; // 1 second transition
       const totalFrames = images.length * ((imageDisplayTime + transitionTime) / frameDuration);
 
       mediaRecorder.ondataavailable = (e) => {
@@ -131,18 +131,18 @@ export function VideoCreator({ onVideoCreate }: VideoCreatorProps) {
           mediaRecorder.stop();
           return;
         }
-
+      
         const currentTime = currentFrame * frameDuration;
         const cycleTime = imageDisplayTime + transitionTime;
         const currentCycle = Math.floor(currentTime / cycleTime);
         const timeInCycle = currentTime % cycleTime;
-        
+      
         const currentImageIndex = currentCycle % images.length;
         const nextImageIndex = (currentCycle + 1) % images.length;
-
+      
         const currentImg = await loadImage(images[currentImageIndex]);
         ctx.clearRect(0, 0, width, height);
-
+      
         if (timeInCycle < imageDisplayTime) {
           // Display current image
           ctx.globalAlpha = 1;
@@ -151,39 +151,70 @@ export function VideoCreator({ onVideoCreate }: VideoCreatorProps) {
           // Transition to next image
           const nextImg = await loadImage(images[nextImageIndex]);
           const transitionProgress = (timeInCycle - imageDisplayTime) / transitionTime;
-
+      
+          // Apply smoother transition blending
           switch (transition) {
             case 'fade':
-              ctx.globalAlpha = 1;
+              ctx.globalAlpha = 1 - transitionProgress; // Smooth fade-out for current image
               drawImageCovered(ctx, currentImg, width, height);
-              ctx.globalAlpha = transitionProgress;
+              
+              ctx.globalAlpha = transitionProgress; // Smooth fade-in for next image
               drawImageCovered(ctx, nextImg, width, height);
               break;
-
+      
             case 'slide':
               drawImageCovered(ctx, currentImg, width, height);
               ctx.save();
-              ctx.translate(width * (1 - transitionProgress), 0);
+              ctx.translate(width * (1 - transitionProgress), 0);  // Horizontal slide
               drawImageCovered(ctx, nextImg, width, height);
               ctx.restore();
               break;
-
-            case 'zoom':
-              const scale = 1 + (0.2 * (1 - transitionProgress));
+      
+            case 'verticalSlide':
+              drawImageCovered(ctx, currentImg, width, height);
               ctx.save();
-              ctx.translate(width/2, height/2);
+              ctx.translate(0, height * (1 - transitionProgress));  // Vertical slide
+              drawImageCovered(ctx, nextImg, width, height);
+              ctx.restore();
+              break;
+      
+            case 'zoom':
+              const scale = 1 + (0.2 * (1 - transitionProgress));  // Adjust zoom scale
+              ctx.save();
+              ctx.translate(width / 2, height / 2);
               ctx.scale(scale, scale);
-              ctx.translate(-width/2, -height/2);
+              ctx.translate(-width / 2, -height / 2);
+              drawImageCovered(ctx, nextImg, width, height);
+              ctx.restore();
+              break;
+      
+            case 'rotate':
+              const angle = Math.PI * transitionProgress;  // Rotate the next image
+              ctx.save();
+              ctx.translate(width / 2, height / 2);
+              ctx.rotate(angle);
+              ctx.translate(-width / 2, -height / 2);
+              drawImageCovered(ctx, nextImg, width, height);
+              ctx.restore();
+              break;
+      
+            case 'flip':
+              const flipProgress = Math.min(1, transitionProgress * 2);  // For flip effect
+              ctx.save();
+              ctx.translate(width / 2, height / 2);
+              ctx.scale(flipProgress, 1);  // Flip horizontally based on progress
+              ctx.translate(-width / 2, -height / 2);
               drawImageCovered(ctx, nextImg, width, height);
               ctx.restore();
               break;
           }
         }
-
+      
         currentFrame++;
         setRenderProgress((currentFrame / totalFrames) * 100);
         requestAnimationFrame(renderFrame);
       };
+      
 
       mediaRecorder.start();
       renderFrame();
@@ -237,7 +268,7 @@ export function VideoCreator({ onVideoCreate }: VideoCreatorProps) {
       return finalBlob;
     } finally {
       // Clean up
-      await ffmpeg.terminate();
+      ffmpeg.terminate();
     }
   };
 
@@ -303,10 +334,14 @@ export function VideoCreator({ onVideoCreate }: VideoCreatorProps) {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="fade">Fade</SelectItem>
+                  <SelectItem value="fade">Fade</SelectItem>
                     <SelectItem value="slide">Slide</SelectItem>
+                    <SelectItem value="verticalSlide">Vertical Slide</SelectItem>
                     <SelectItem value="zoom">Zoom</SelectItem>
+                    <SelectItem value="rotate">Rotate</SelectItem>
+                    <SelectItem value="flip">Flip</SelectItem>
                   </SelectContent>
+
                 </Select>
               </div>
 

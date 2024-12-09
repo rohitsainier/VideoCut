@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -67,7 +65,14 @@ export function VideoEditor({ videoFile, onReset }: VideoEditorProps) {
 
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
-      setDuration(videoRef.current.duration);
+      const newDuration = videoRef.current.duration;
+      if (isFinite(newDuration)) {
+        setDuration(newDuration);
+        // Also update trimEnd if we're not currently trimming
+        if (!isTrimming) {
+          setTrimEnd(newDuration);
+        }
+      }
     }
   };
 
@@ -93,6 +98,7 @@ export function VideoEditor({ videoFile, onReset }: VideoEditorProps) {
   };
 
   const formatTime = (time: number) => {
+    if (!isFinite(time)) return "0:00";
     const minutes = Math.floor(time / 60);
     const seconds = Math.floor(time % 60);
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
@@ -101,12 +107,14 @@ export function VideoEditor({ videoFile, onReset }: VideoEditorProps) {
   const handleTrimOpen = () => {
     if (videoRef.current) {
       const video = videoRef.current;
-      const validEnd = isFinite(video.duration) ? video.duration : 0;
-      setTrimStart(0);
-      setTrimEnd(validEnd);
-      setTrimDialogOpen(true);
-      video.pause();
-      setIsPlaying(false);
+      const currentDuration = video.duration;
+      if (isFinite(currentDuration)) {
+        setTrimStart(0);
+        setTrimEnd(currentDuration);
+        setTrimDialogOpen(true);
+        video.pause();
+        setIsPlaying(false);
+      }
     }
   };
 
@@ -128,7 +136,7 @@ export function VideoEditor({ videoFile, onReset }: VideoEditorProps) {
       }
   
       // Calculate duration
-      const duration = trimEnd - trimStart;
+      const trimDuration = trimEnd - trimStart;
       
       // Create media recorder
       const stream = (video as any).captureStream() as MediaStream;
@@ -153,21 +161,40 @@ export function VideoEditor({ videoFile, onReset }: VideoEditorProps) {
             const blob = new Blob(chunks, { type: 'video/webm' });
             const url = URL.createObjectURL(blob);
             
-            // Update video source
-            video.src = url;
-            
             // Clean up old URL if it exists
             if (video.dataset.trimmedUrl) {
               URL.revokeObjectURL(video.dataset.trimmedUrl);
             }
             
-            // Store new URL for future cleanup
-            video.dataset.trimmedUrl = url;
-            video.currentTime = 0;
-            setCurrentTime(0);
-            setDuration(duration);
-
-            resolve();
+            // Create a temporary video element to get the actual duration
+            const tempVideo = document.createElement('video');
+            tempVideo.preload = 'metadata';
+            
+            tempVideo.onloadedmetadata = () => {
+              const actualDuration = tempVideo.duration;
+              if (isFinite(actualDuration)) {
+                setDuration(actualDuration);
+              } else {
+                setDuration(trimDuration); // Fallback to calculated duration
+              }
+              
+              // Now set the source on the main video
+              video.src = url;
+              video.dataset.trimmedUrl = url;
+              video.currentTime = 0;
+              setCurrentTime(0);
+              
+              // Clean up temp video
+              URL.revokeObjectURL(tempVideo.src);
+              resolve();
+            };
+            
+            tempVideo.onerror = () => {
+              reject(new Error('Error loading trimmed video metadata'));
+            };
+            
+            tempVideo.src = url;
+            
           } catch (error) {
             reject(error);
           }
@@ -199,7 +226,7 @@ export function VideoEditor({ videoFile, onReset }: VideoEditorProps) {
             return;
           }
   
-          const progress = ((video.currentTime - trimStart) / duration) * 100;
+          const progress = ((video.currentTime - trimStart) / trimDuration) * 100;
           setTrimProgress(Math.round(Math.min(100, Math.max(0, progress))));
           
           if (video.currentTime < trimEnd) {
