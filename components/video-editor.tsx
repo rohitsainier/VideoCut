@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { VideoFile } from "@/types/video";
+import { EditVideoFile } from "@/types/video";
 import { 
   Play, 
   Pause, 
@@ -18,7 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Progress } from "@/components/ui/progress";
 
 interface VideoEditorProps {
-  videoFile: VideoFile;
+  videoFile: EditVideoFile;
   onReset: () => void;
 }
 
